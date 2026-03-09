@@ -1,0 +1,84 @@
+name: Initialize Template Repository
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  setup-repo:
+    if: github.repository != 'crifilto/CrIsCD'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_ADMIN_TOKEN || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configurar Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Sincronizar o crear ramas 'develop' y 'feature/init'
+        run: |
+          # Si la rama ya existe (porque marcaron 'Include all branches'), solo la sincronizamos.
+          # Si no existe, la creamos desde main.
+          git checkout develop 2>/dev/null || git checkout -b develop
+          git push origin develop
+          
+          git checkout feature/init 2>/dev/null || git checkout -b feature/init
+          git push origin feature/init
+
+      - name: Configurar reglas de protección (Ruleset)
+        env:
+          GH_TOKEN: ${{ secrets.PAT_ADMIN_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::No se ha configurado el secreto PAT_ADMIN_TOKEN. Omitiendo la protección automática de ramas."
+            exit 0
+          fi
+          
+          # Crear un Ruleset para 'main' y 'develop'
+          # Esto bloquea push directos y requiere PR con 1 aprobación.
+          gh api -X POST /repos/${{ github.repository }}/rulesets \
+            -H "Accept: application/vnd.github.v3+json" \
+            -f name="Protected Branches" \
+            -f target="branch" \
+            -f enforcement="active" \
+            -q . << 'EOF'
+          {
+            "conditions": {
+              "ref_name": {
+                "include": ["refs/heads/main", "refs/heads/develop"],
+                "exclude": []
+              }
+            },
+            "rules": [
+              {
+                "type": "pull_request",
+                "parameters": {
+                  "required_approving_review_count": 1,
+                  "dismiss_stale_reviews_on_push": true,
+                  "require_code_owner_review": false,
+                  "require_last_push_approval": false,
+                  "required_review_thread_resolution": false
+                }
+              },
+              { "type": "deletion" },
+              { "type": "non_fast_forward" }
+            ]
+          }
+          EOF
+
+      - name: Borrar este workflow (Self-destruct)
+        run: |
+          git checkout main
+          git rm .github/workflows/init-template.yml
+          git commit -m "chore: eliminar workflow de inicialización tras configurarlo [skip ci]"
+          git push origin main
